@@ -10,7 +10,47 @@ Audit **any website or local project** from Claude (MCP), a web UI, or the comma
 
 > Only test sites you own or have permission to test. Security checks send ordinary requests to common sensitive paths.
 
-## Quick start
+## Fastest way: run it straight from GitHub (no clone, no install)
+
+Requires **Node 18+** and **Git** only. Replace `OWNER` with the GitHub account that hosts this repo (for example `dhanush-dev-harvee`).
+
+**Claude Code** (works in every project):
+```bash
+claude mcp add --scope user web-qa -- npx -y github:OWNER/web-qa-mcp
+```
+On native Windows Claude Code, use `cmd /c` in front of npx:
+```bash
+claude mcp add --scope user web-qa -- cmd /c npx -y github:OWNER/web-qa-mcp
+```
+
+**Claude Desktop / Cursor / any MCP client** - paste this into the MCP config (Windows: use `"command": "cmd", "args": ["/c", "npx", "-y", "github:OWNER/web-qa-mcp"]`):
+```json
+{
+  "mcpServers": {
+    "web-qa": { "command": "npx", "args": ["-y", "github:OWNER/web-qa-mcp"] }
+  }
+}
+```
+
+The first start downloads the code and the Chromium browser (about 1-2 minutes); after that it starts in seconds. Nothing is cloned into your projects.
+To get a newer version later, delete the `_npx` folder inside the folder printed by `npm config get cache`, then restart Claude. You can also pin a version with a Git tag, e.g. `github:OWNER/web-qa-mcp#v2.0.0`.
+
+**UI without cloning:**
+```bash
+npx -y --package=github:OWNER/web-qa-mcp web-qa-ui
+```
+then open http://localhost:4010.
+
+**Install the Claude skills and agents without cloning:**
+```bash
+npx -y --package=github:OWNER/web-qa-mcp web-qa-skills
+```
+
+Where things are saved when run this way: reports in `~/web-qa-results`, your saved site profiles in `~/.web-qa/profiles` (override with `WEBQA_OUT_DIR` / `WEBQA_PROFILE_DIR`).
+
+> **Private repository?** `npx github:...` needs Git to sign in without a prompt, which MCP clients cannot show. Either make the repository public, or use an SSH URL (`git+ssh://git@github.com/OWNER/web-qa-mcp.git`) on machines that have an SSH key added to GitHub.
+
+## Quick start (clone it instead)
 
 Requires **Node 18+** (and Git).
 
