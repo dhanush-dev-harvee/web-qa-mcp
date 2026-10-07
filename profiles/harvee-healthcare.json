@@ -1,0 +1,11 @@
+{
+  "baseUrl": "https://www.harveehealthcare.com/",
+  "loadBudgetMs": 4000,
+  "ignoreConsole": [
+    "requestStorageAccess",
+    "openai",
+    "onesignal",
+    "google-analytics",
+    "googletagmanager"
+  ]
+}

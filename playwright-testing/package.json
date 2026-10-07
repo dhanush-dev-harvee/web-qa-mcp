@@ -1,0 +1,14 @@
+{
+  "name": "playwright-testing",
+  "version": "1.0.0",
+  "description": "Playwright Test suite (smoke, SEO, links/crawl, performance+a11y, interaction+responsive) - target any site via PW_* env vars",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:seo": "playwright test 02-seo --project=chromium",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "test:headed": "playwright test --project=chromium --headed --workers=1 05-interaction"
+  },
+  "devDependencies": { "@playwright/test": "^1.63.0" }
+}

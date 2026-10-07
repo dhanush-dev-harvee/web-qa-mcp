@@ -1,0 +1,6 @@
+{
+  "baseUrl": "https://www.harveedesigns.com/",
+  "pages": ["/", "/about-us.html", "/our-team.html", "/portfolio.html", "/contact-us.html", "/web-development-company.html", "/software-development.html", "/social-media-marketing.html", "/seo-company-in-coimbatore.html", "/privacy-policy.html", "/terms-and-conditions.html"],
+  "loadBudgetMs": 4000,
+  "ignoreConsole": ["requestStorageAccess", "openai", "onesignal", "google-analytics", "googletagmanager"]
+}

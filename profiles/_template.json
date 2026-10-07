@@ -1,0 +1,21 @@
+{
+  "baseUrl": "https://your-app.example.com/",
+  "pages": ["/", "/login", "/dashboard"],
+  "loadBudgetMs": 3000,
+  "ignoreConsole": ["regex of third-party noise"],
+  "skipLinks": ["logout", "mailto:", "tel:"],
+  "form": { "selector": "form#booking", "successText": "thank you" },
+  "auth": {
+    "loginUrl": "/login",
+    "userSelector": "#email", "passSelector": "#password", "submitSelector": "button[type=submit]",
+    "userEnv": "MYAPP_USER", "passEnv": "MYAPP_PASS"
+  },
+  "flows": {
+    "book-appointment": [
+      { "action": "goto", "url": "/book" },
+      { "action": "fill", "selector": "#name", "value": "QA Tester" },
+      { "action": "click", "selector": "button[type=submit]" },
+      { "action": "expect_text", "value": "confirmed" }
+    ]
+  }
+}

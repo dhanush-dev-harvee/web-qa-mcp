@@ -1,0 +1,6 @@
+node_modules/
+results/
+*.log
+.webqa-backup/
+mcp-config.generated.json
+.env
