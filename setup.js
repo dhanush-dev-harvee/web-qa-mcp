@@ -15,7 +15,8 @@ const flags = new Set(process.argv.slice(2));
 const win = process.platform === 'win32';
 const run = (cmd, args, cwd) => {
   console.log(`\n> ${cmd} ${args.join(' ')}   (${path.relative(HERE, cwd) || '.'})`);
-  const r = spawnSync(win && cmd === 'npm' ? 'npm.cmd' : win && cmd === 'npx' ? 'npx.cmd' : cmd, args, { cwd, stdio: 'inherit', shell: win });
+  // One command string + shell:true works for npm/npx/claude on Windows, macOS and Linux (all args here are fixed, none user-supplied).
+  const r = spawnSync([cmd, ...args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' '), { cwd, stdio: 'inherit', shell: true });
   if (r.status !== 0) { console.error(`\nFAILED: ${cmd} ${args.join(' ')}`); process.exit(r.status || 1); }
 };
 
