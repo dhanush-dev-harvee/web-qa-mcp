@@ -86,7 +86,9 @@ details{margin-bottom:10px;border:1px solid var(--line);border-radius:9px;paddin
       <div class="grp" style="margin-top:0">Playwright suite browsers</div>
       <div id="pwProjects" class="two" style="gap:2px 10px"></div>
       <small class="note">Firefox, WebKit and mobile only run specs 01 and 05 (as in your playwright-testing config).</small>
-      <div style="margin-top:6px"><small class="note">Slow motion when watching (ms)</small><input id="slowMo" type="number" min="0" max="2000" value="300"></div>
+      <div class="two" style="margin-top:6px"><div><small class="note">Playwright pages (max)</small><input id="pwMaxPages" type="number" min="1" max="30" value="5"></div>
+        <div><small class="note">Slow motion when watching (ms)</small><input id="slowMo" type="number" min="0" max="2000" value="300"></div></div>
+      <small class="note">The Playwright suite runs every spec on every page, so it is the slowest part (about 1-2 min per page).</small>
     </div>
   </div>
 
@@ -98,7 +100,7 @@ details{margin-bottom:10px;border:1px solid var(--line);border-radius:9px;paddin
 <!-- ================= RIGHT: progress + report ================= -->
 <div>
   <div class="card" id="prog" hidden>
-    <div style="display:flex;justify-content:space-between;margin-bottom:8px"><b id="pmsg">Starting…</b><button class="btn red" id="cancel">Cancel</button></div>
+    <div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px"><b id="pmsg" style="word-break:break-word">Starting…</b><span class="note" id="pelapsed" style="white-space:nowrap"></span><button class="btn red" id="cancel">Cancel &amp; keep results so far</button></div>
     <div class="bar"><i id="pbar"></i></div><div id="log"></div>
   </div>
   <div class="card" id="report"><div class="empty"><b>Ready when you are</b>Pick a live URL or a local project, choose a preset, and press <em>Run tests</em>.<br>Your report appears here and can be downloaded as Word, HTML, Markdown or JSON.</div></div>
@@ -153,23 +155,25 @@ async function useFolder(f) {
 }
 
 // ---- run
-let ES = null, JOB = null;
+let ES = null, JOB = null, TICK = null;
 $('#run').onclick = async () => {
   const checks = selected(); if (!checks.length) return alert('Select at least one test.');
   const body = { url: MODE === 'live' ? $('#url').value.trim() : LOCAL.url, folder: MODE === 'local' ? LOCAL.folder : undefined, checks,
     scope: document.querySelector('input[name=scope]:checked').value, maxPages: +$('#maxPages').value, browser: $('#browser').value, headed: $('#headed').checked,
-    pwProjects: [...document.querySelectorAll('#pwProjects input:checked')].map((i) => i.value), slowMo: +$('#slowMo').value };
+    pwProjects: [...document.querySelectorAll('#pwProjects input:checked')].map((i) => i.value), slowMo: +$('#slowMo').value, pwMaxPages: +$('#pwMaxPages').value };
   const r = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const j = await r.json();
   if (!r.ok) return alert(j.error);
   JOB = j.job; $('#prog').hidden = false; $('#log').innerHTML = ''; $('#pbar').style.width = '0'; $('#pmsg').textContent = 'Starting…'; $('#run').disabled = true;
   $('#report').innerHTML = '<div class="empty"><b>Running…</b>Watch the progress above. This can take a minute or two.</div>';
+  const t0 = Date.now(); clearInterval(TICK);
+  TICK = setInterval(() => { const s = Math.round((Date.now() - t0) / 1000); $('#pelapsed').textContent = `running ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }, 1000);
   ES = new EventSource(`/api/jobs/${JOB}/events`);
   ES.onmessage = (e) => {
     const ev = JSON.parse(e.data);
-    if (ev.type === 'progress') { $('#pbar').style.width = (ev.total ? (ev.done / ev.total) * 100 : 0) + '%'; $('#pmsg').textContent = `${ev.done}/${ev.total} · ${ev.msg}`; $('#log').insertAdjacentHTML('beforeend', `<div>▸ ${esc(ev.msg)}</div>`); $('#log').scrollTop = 1e6; }
+    if (ev.type === 'progress') { $('#pbar').style.width = (ev.total ? (ev.done / ev.total) * 100 : 0) + '%'; $('#pmsg').textContent = `Step ${Math.min(Math.floor(ev.done) + 1, ev.total)} of ${ev.total} · ${ev.msg}`; $('#log').insertAdjacentHTML('beforeend', `<div>▸ ${esc(ev.msg)}</div>`); $('#log').scrollTop = 1e6; }
     if (ev.type === 'log') $('#log').insertAdjacentHTML('beforeend', `<div>${esc(ev.msg)}</div>`);
-    if (ev.type === 'done') { ES.close(); $('#pbar').style.width = '100%'; $('#pmsg').textContent = 'Finished'; $('#prog').hidden = true; refreshRun(); loadReport(ev.id); loadHistory(); }
-    if (ev.type === 'error') { ES.close(); $('#prog').hidden = true; refreshRun(); $('#report').innerHTML = `<div class="empty"><b class="bad">Run stopped</b>${esc(ev.msg)}</div>`; }
+    if (ev.type === 'done') { ES.close(); clearInterval(TICK); $('#pbar').style.width = '100%'; $('#pmsg').textContent = 'Finished'; $('#prog').hidden = true; refreshRun(); loadReport(ev.id); loadHistory(); }
+    if (ev.type === 'error') { ES.close(); clearInterval(TICK); $('#prog').hidden = true; refreshRun(); $('#report').innerHTML = `<div class="empty"><b class="bad">Run stopped</b>${esc(ev.msg)}</div>`; }
   };
   ES.onerror = () => { ES.close(); };
 };
@@ -178,7 +182,7 @@ $('#cancel').onclick = () => fetch(`/api/jobs/${JOB}/cancel`, { method: 'POST' }
 // ---- history
 async function loadHistory() {
   const l = await (await fetch('/api/runs')).json();
-  $('#hist').innerHTML = l.length ? l.map((r) => `<div class="h" data-id="${esc(r.id)}"><div>${esc(r.title.replace(/^https?:\/\//, ''))}<small>${esc(r.when)} · ${esc(r.kind)}</small></div><span class="badge ${r.totals.fail ? 'b-fail' : r.totals.warn ? 'b-warn' : 'b-pass'}">${r.score}</span></div>`).join('') : '<div class="note">No reports yet.</div>';
+  $('#hist').innerHTML = l.length ? l.map((r) => `<div class="h" data-id="${esc(r.id)}"><div>${esc(r.title.replace(/^https?:\/\//, ''))}<small>${esc(r.when)} · ${esc(r.kind)} · ${r.checks} checks · ${r.pages} page(s)${r.partial ? ' · <b class="bad">partial</b>' : ''}</small></div><span class="badge ${r.totals.fail ? 'b-fail' : r.totals.warn ? 'b-warn' : 'b-pass'}">${r.score}</span></div>`).join('') : '<div class="note">No reports yet.</div>';
   $('#hist').onclick = (e) => { const h = e.target.closest('.h'); if (h) loadReport(h.dataset.id); };
 }
 
@@ -197,7 +201,9 @@ function renderReport(tab) {
   const dl = (f, l) => `<a class="btn ghost" href="/api/runs/${encodeURIComponent(RID)}/download/${f}">${l}</a>`;
   let h = `<div class="top"><div class="ring" style="background:conic-gradient(${col(d.score)} ${d.score * 3.6}deg,var(--line) 0)"><div><span><b>${d.score}</b><small>/ 100</small></span></div></div>
     <div><div style="font-size:18px;font-weight:700">${esc(d.title)}</div><div class="note">${esc(d.when)} · ${esc(d.meta?.kind || '')} · ${d.sections.length} page(s) · ${d.meta?.seconds ?? '?'}s${d.meta?.folder ? ' · local: ' + esc(d.meta.folder) : ''}</div>
-    <div style="margin-top:6px"><span class="badge ${d.totals.fail ? 'b-fail' : d.totals.warn ? 'b-warn' : 'b-pass'}" style="font-size:13px;padding:3px 10px">${d.verdict}</span></div></div>
+    <div style="margin-top:6px"><span class="badge ${d.totals.fail ? 'b-fail' : d.totals.warn ? 'b-warn' : 'b-pass'}" style="font-size:13px;padding:3px 10px">${d.verdict}</span></div>
+    <div class="note" style="margin-top:6px">Score covers only the ${d.meta?.checks?.length ?? '?'} check(s) in this run, so runs with different checks are not directly comparable.</div>
+    ${d.meta?.partial ? `<div class="warnbox">Partial report: the run was stopped early (${esc(d.meta.partial)}). Only finished checks are included.</div>` : ''}</div>
     <div class="counts"><div class="cnt"><b style="color:var(--pass)">${d.totals.pass}</b>passed</div><div class="cnt"><b style="color:var(--fail)">${d.totals.fail}</b>failed</div><div class="cnt"><b style="color:var(--warn)">${d.totals.warn}</b>warnings</div></div></div>
     <div class="dl" style="margin-top:14px">${dl('docx', '⬇ Word report (.docx)')}${dl('html', '⬇ HTML (standalone)')}${dl('md', '⬇ Markdown')}${dl('json', '⬇ JSON')}<a class="btn ghost" target="_blank" href="${dir}/report.html">Open full report ↗</a></div>
     <div class="tabs">${tabs.map(([k, l]) => `<button data-t="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div><div id="tabbody"></div>`;

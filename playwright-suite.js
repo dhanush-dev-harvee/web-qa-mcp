@@ -1,6 +1,6 @@
 // Runs the bundled Playwright Test project (./playwright-testing; override with WEBQA_PW_DIR) against ANY target,
 // then converts its results.json (+ finding annotations) into the Web QA report format.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,6 +29,13 @@ export function startProxy(target) {
     } catch (e) { rs.writeHead(502); rs.end('proxy error: ' + e.message); }
   });
   return new Promise((ok) => srv.listen(0, '127.0.0.1', () => ok({ url: `http://127.0.0.1:${srv.address().port}`, close: () => srv.close() })));
+}
+
+// child.kill() on Windows leaves Playwright's worker processes and browsers running; kill the whole tree.
+export function killTree(child) {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  else child.kill('SIGKILL');
 }
 
 const stripAnsi = (s = '') => String(s).replace(/\u001b\[[0-9;]*m/g, '');
@@ -74,7 +81,7 @@ export function convertResults(outDir, runDir, baseUrl) {
 }
 
 export async function runPlaywright(o) {
-  if (!pwAvailable()) throw new Error(`Playwright Test project not found at ${PW_DIR}. Set WEBQA_PW_DIR to your playwright-testing folder (needs playwright.config.js and node_modules).`);
+  if (!pwAvailable()) throw new Error(`Playwright Test project is not installed at ${PW_DIR}. Run "node setup.js" in the web-qa-mcp folder (or set WEBQA_PW_DIR to a playwright-testing project that has node_modules).`);
   const specs = (o.specs?.length ? o.specs : PW_SPECS.map((s) => s.file)).map((s) => s.replace(/^pw:/, ''));
   const projects = (o.projects?.length ? o.projects : ['chromium']).filter((p) => PW_PROJECTS.includes(p));
   const outDir = path.join(o.runDir, 'pw'); fs.mkdirSync(outDir, { recursive: true });
@@ -87,12 +94,32 @@ export async function runPlaywright(o) {
   const cli = path.join(PW_DIR, 'node_modules', '@playwright', 'test', 'cli.js');
   const args = [cli, 'test', ...specs, ...projects.flatMap((p) => ['--project', p])];
   const tail = [];
+
+  // How many tests will run? (fast: lists them without running) -> lets the UI show "23 / 118 tests"
+  let total = 0;
+  try {
+    const l = spawnSync(process.execPath, [cli, 'test', '--list', '--reporter=list', ...args.slice(2)], { cwd: PW_DIR, env, encoding: 'utf8', timeout: 60000 });
+    total = Number((stripAnsi(l.stdout || '').match(/Total:\s*(\d+)\s+test/) || [])[1]) || 0;
+  } catch { /* progress just won't have a total */ }
+  o.onProgress?.({ done: 0, total, line: `Playwright will run ${total || 'an unknown number of'} tests` });
+
+  const timeoutMs = o.timeoutMs ?? 20 * 60 * 1000;     // hard cap so a run can never hang forever
+  const seen = new Set();
   await new Promise((ok, fail) => {
     const child = spawn(process.execPath, args, { cwd: PW_DIR, env, windowsHide: !o.headed });
     o.onSpawn?.(child);
-    const onData = (d) => { for (const line of stripAnsi(d.toString()).split(/\r?\n/)) if (line.trim()) { tail.push(line); if (tail.length > 60) tail.shift(); o.onLine?.(line); } };
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs);
+    const onData = (d) => {
+      for (const line of stripAnsi(d.toString()).split(/\r?\n/)) if (line.trim()) {
+        tail.push(line); if (tail.length > 60) tail.shift(); o.onLine?.(line);
+        const m = line.match(/^\s*(?:ok|x|-|✓|✗|✘)\s+(\d+)\s+\[/);     // "ok 12 [chromium] > ..." (retries reuse the number)
+        if (m) { seen.add(m[1]); o.onProgress?.({ done: total ? Math.min(seen.size, total) : seen.size, total, line: line.trim().replace(/\s+\(\d+(\.\d+)?m?s\)$/, '').slice(0, 140) }); }
+      }
+    };
     child.stdout.on('data', onData); child.stderr.on('data', onData);
-    child.on('error', fail); child.on('close', (code) => (code === null ? fail(new Error('Playwright run was cancelled')) : ok(code)));
+    child.on('error', (e) => { clearTimeout(timer); fail(e); });
+    child.on('close', (code) => { clearTimeout(timer); if (timedOut) fail(new Error(`Playwright suite was stopped after ${Math.round(timeoutMs / 60000)} minutes (${seen.size}/${total} tests done). Run fewer pages or spec files.`)); else if (code === null) fail(new Error('Playwright run was cancelled')); else ok(code); });
   });
   const conv = convertResults(outDir, o.runDir, o.url);
   if (!conv) throw new Error('Playwright produced no results. ' + (projects.some((p) => p !== 'chromium') ? 'Note: firefox, webkit and mobile-chrome only run specs 01 and 05. ' : '') + 'Last output: ' + tail.slice(-4).join(' | '));

@@ -54,6 +54,7 @@ async function login(page, a) {
 
 export async function withPage(cfg, fn) {
   const b = await engines[cfg.browser || 'chromium'].launch({ headless: !cfg.headed, slowMo: cfg.headed ? 150 : 0 });
+  cfg.tracker?.push(b);   // lets runSuite close this browser if the check times out or the user cancels
   const ctxOpts = { viewport: VIEWPORTS[cfg.viewport] || VIEWPORTS.desktop, ignoreHTTPSErrors: true };
   if (cfg.storageState && fs.existsSync(cfg.storageState)) ctxOpts.storageState = cfg.storageState;
   const ctx = await b.newContext(ctxOpts);
@@ -217,14 +218,19 @@ export async function brokenLinks(cfg) {
     await go(page, cfg.url);
     const links = await page.evaluate(() => [...new Set([...document.querySelectorAll('a[href]')].map((a) => a.href).filter((h) => /^https?:/.test(h)))]);
     const todo = links.filter((l) => !matches(l, cfg.skipLinks)).slice(0, cfg.maxLinks || 60);
-    const bad = [];
-    for (const l of todo) {
-      try {
-        let r = await ctx.request.head(l, { timeout: 15000, failOnStatusCode: false });
-        if (r.status() >= 400) r = await ctx.request.get(l, { timeout: 15000, failOnStatusCode: false });
-        if (r.status() >= 400 && ![401, 403, 429, 999].includes(r.status())) bad.push(`${r.status()} ${l}`);
-      } catch (e) { bad.push(`ERR ${l} (${e.message.slice(0, 40)})`); }
-    }
+    const bad = [], cache = cfg.linkCache || new Map();   // cache: header/footer links repeat on every page, check each URL once per run
+    const check = async (l) => {
+      if (!cache.has(l)) cache.set(l, (async () => {
+        try {
+          let r = await ctx.request.head(l, { timeout: 8000, failOnStatusCode: false });
+          if (r.status() >= 400) r = await ctx.request.get(l, { timeout: 8000, failOnStatusCode: false });
+          return r.status() >= 400 && ![401, 403, 429, 999].includes(r.status()) ? `${r.status()} ${l}` : null;
+        } catch (e) { return `ERR ${l} (${e.message.slice(0, 40)})`; }
+      })());
+      const out = await cache.get(l); if (out) bad.push(out);
+    };
+    const queue = [...todo];                                // 8 requests in parallel instead of one at a time
+    await Promise.all(Array.from({ length: 8 }, async () => { while (queue.length) await check(queue.shift()); }));
     return [res(`Links OK (${todo.length}/${links.length} checked)`, bad.length ? 'fail' : 'pass', bad.join('\n'))];
   });
 }
@@ -387,11 +393,27 @@ export const registerSuites = (o) => Object.assign(SUITES, o);
 export async function runSuite(cfg, only) {
   const names = only?.length ? only : cfg.suites || Object.keys(SUITES);
   const report = [];
+  const limit = cfg.suiteTimeoutMs || 150000;   // no single check may run longer than this (default 2.5 min)
   for (const n of names) {
-    const evidence = [];
-    const c = { ...cfg, suiteName: n, evidence };
-    try { report.push({ suite: n, results: await SUITES[n](c), shots: evidence }); }
-    catch (e) { report.push({ suite: n, results: [res(n, 'fail', 'suite crashed: ' + e.message.split('\n')[0])], shots: evidence }); }
+    if (cfg.signal?.aborted) break;
+    const evidence = [], tracker = [];
+    const c = { ...cfg, suiteName: n, evidence, tracker };
+    let timer, onAbort;
+    const guard = new Promise((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), limit);
+      onAbort = () => resolve('cancel'); cfg.signal?.addEventListener('abort', onAbort);
+    });
+    try {
+      const work = SUITES[n](c).then((results) => ({ results }));
+      work.catch(() => {});   // if we time out and kill the browser, the abandoned check will reject - that must not crash the server
+      const out = await Promise.race([work, guard]);
+      if (out === 'timeout' || out === 'cancel') {
+        await Promise.all(tracker.map((b) => b.close().catch(() => {})));   // kill the stuck browser(s)
+        if (out === 'cancel') break;
+        report.push({ suite: n, results: [res(`${n} timed out`, 'fail', `no result after ${Math.round(limit / 1000)}s - the page or network is too slow, or the page blocks automation. Re-run this check on its own or test fewer pages.`, 'Run')], shots: evidence });
+      } else report.push({ suite: n, results: out.results, shots: evidence });
+    } catch (e) { report.push({ suite: n, results: [res(n, 'fail', 'suite crashed: ' + e.message.split('\n')[0])], shots: evidence }); }
+    finally { clearTimeout(timer); cfg.signal?.removeEventListener('abort', onAbort); }
   }
   return report;
 }

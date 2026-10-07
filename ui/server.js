@@ -80,11 +80,19 @@ const emit = (job, ev) => { job.log.push(ev); for (const r of job.listeners) r.w
 
 async function runJob(job, body) {
   const t0 = Date.now();
+  let sections = [], runDir = null, playwright = null, checksSel = [], baseCfg = null;
+  // Writes whatever has been collected so far, so a cancel / timeout / crash never loses finished work.
+  const finishReport = (partialReason) => {
+    const r = writeReport(runDir, body.url, sections, { kind: body.scope === 'site' ? 'Site audit' : 'Single page', browser: baseCfg?.browser, checks: checksSel, scope: body.scope, folder: baseCfg?.folder || null, playwright, partial: partialReason || null, seconds: Math.round((Date.now() - t0) / 1000) });
+    job.status = 'done'; emit(job, { type: 'done', id: job.id, verdict: r.verdict, score: r.score, totals: r.totals, partial: partialReason || null });
+  };
   try {
-    const base = { url: body.url, folder: body.folder, browser: body.browser || 'chromium', headed: !!body.headed, loadBudgetMs: 4000 };
+    job.abort = new AbortController();
+    const base = baseCfg = { url: body.url, folder: body.folder, browser: body.browser || 'chromium', headed: !!body.headed, loadBudgetMs: 4000, signal: job.abort.signal, linkCache: new Map() };
     const known = new Set(T.CATALOG.map((c) => c.id));
     const checks = (body.checks || []).filter((c) => known.has(c));
     if (!checks.length) throw new Error('Select at least one check.');
+    checksSel = checks;
     const scopeOf = (id) => T.CATALOG.find((c) => c.id === id).scope;
     const siteChecks = checks.filter((c) => scopeOf(c) === 'site'), pageChecks = checks.filter((c) => scopeOf(c) === 'page'), pwChecks = checks.filter((c) => scopeOf(c) === 'pw');
 
@@ -98,33 +106,35 @@ async function runJob(job, body) {
     }
     const plan = urls.map((u, i) => ({ url: u, suites: [...(i === 0 ? siteChecks : []), ...pageChecks] }));
     const total = plan.reduce((n, p) => n + p.suites.length, 0) + (pwChecks.length ? 1 : 0);
-    const runDir = T.newRun(base.url, body.scope === 'site' ? 'site-audit' : 'run');
+    runDir = T.newRun(base.url, body.scope === 'site' ? 'site-audit' : 'run');
     job.id = `${path.basename(path.dirname(runDir))}~${path.basename(runDir)}`;
-    const sections = []; let done = 0;
+    let done = 0;
     for (const p of plan) {
       const section = { title: new URL(p.url).pathname === '/' ? new URL(p.url).host : new URL(p.url).pathname, url: p.url, report: [] };
+      sections.push(section);      // added up-front so a cancel/timeout keeps this page's finished checks
       for (const s of p.suites) {
         if (job.cancel) throw new Error('Cancelled by user');
         emit(job, { type: 'progress', done, total, msg: `${T.CATALOG.find((c) => c.id === s).label} — ${section.title}` });
         section.report.push(...(await T.runSuite({ ...base, url: p.url, runDir }, [s])));
         done++;
       }
-      if (section.report.length) sections.push(section);
+      if (!section.report.length) sections.splice(sections.indexOf(section), 1);
     }
     // ---- Playwright Test project (real @playwright/test run: specs x browsers, traces, native HTML report)
-    let playwright = null;
     if (pwChecks.length) {
       if (job.cancel) throw new Error('Cancelled by user');
-      if (!PW.pwAvailable()) throw new Error(`Playwright Test project not found at ${PW.PW_DIR}. Set WEBQA_PW_DIR.`);
+      if (!PW.pwAvailable()) throw new Error(`Playwright Test project is not installed at ${PW.PW_DIR}. Run "node setup.js" in the web-qa-mcp folder.`);
       emit(job, { type: 'progress', done, total, msg: `Playwright Test: ${pwChecks.length} spec file(s) × ${(body.pwProjects?.length ? body.pwProjects : ['chromium']).join(', ')} …` });
       const bu = new URL(base.url), prefix = bu.pathname.replace(/\/$/, '');
       const proxy = prefix ? await PW.startProxy(base.url) : null;      // app lives under a sub-path: map "/" to it
       try {
         const pages = urls.map((u) => { const x = new URL(u); const p = x.pathname.startsWith(prefix) ? x.pathname.slice(prefix.length) || '/' : x.pathname; return p + x.search; });
+        const pwPages = [...new Set(pages)].slice(0, Math.max(1, Number(body.pwMaxPages) || 5));   // the Playwright suite is slow: cap its pages
+        if (pwPages.length < new Set(pages).size) emit(job, { type: 'log', msg: `Playwright suite will test the first ${pwPages.length} pages (limit shown in Options).` });
         const pw = await PW.runPlaywright({
-          url: proxy ? proxy.url : bu.origin, runDir, specs: pwChecks, projects: body.pwProjects, pages: [...new Set(pages)], headed: base.headed, slowMo: body.slowMo, retries: 1,
+          url: proxy ? proxy.url : bu.origin, runDir, specs: pwChecks, projects: body.pwProjects, pages: pwPages, headed: base.headed, slowMo: body.slowMo, retries: 1,
           onSpawn: (c) => (job.child = c),
-          onLine: (l) => { if (/^\s*(✓|✘|-|ok|\d+\))|›/.test(l) && l.length < 200) emit(job, { type: 'log', msg: l.trim() }); },
+          onProgress: (p) => emit(job, { type: 'progress', done: done + (p.total ? Math.min(p.done / p.total, 0.99) : 0), total, msg: p.total ? `Playwright tests ${p.done}/${p.total} · ${p.line}` : p.line }),
         });
         sections.push({ title: 'Playwright suite', url: base.url, report: pw.report });
         playwright = { projects: pw.projects, specs: pw.specs, stats: pw.stats, htmlReport: pw.htmlReport, markdown: pw.markdown };
@@ -132,10 +142,13 @@ async function runJob(job, body) {
       } finally { proxy?.close(); }
     }
     emit(job, { type: 'progress', done, total, msg: 'Writing report…' });
-    const r = writeReport(runDir, base.url, sections, { kind: body.scope === 'site' ? 'Site audit' : 'Single page', browser: base.browser, checks, scope: body.scope, folder: base.folder || null, playwright, seconds: Math.round((Date.now() - t0) / 1000) });
-    job.status = 'done'; emit(job, { type: 'done', id: job.id, verdict: r.verdict, score: r.score, totals: r.totals });
+    finishReport(job.cancel ? 'Cancelled by user' : undefined);
   } catch (e) {
-    job.status = 'error'; emit(job, { type: 'error', msg: e.message });
+    sections = sections.filter((s) => s.report.length);
+    if (runDir && sections.length) {   // keep the work that already finished
+      try { emit(job, { type: 'log', msg: `Stopped: ${e.message} - saving the results collected so far.` }); finishReport(e.message); }
+      catch (e2) { job.status = 'error'; emit(job, { type: 'error', msg: e.message }); }
+    } else { job.status = 'error'; emit(job, { type: 'error', msg: e.message }); }
   } finally { busy = null; for (const r of job.listeners) r.end(); job.listeners.clear(); }
 }
 
@@ -148,7 +161,7 @@ app.post('/api/runs', wrap(async (req, res) => {
   runJob(job, b);
   res.json({ job: key });
 }));
-app.post('/api/jobs/:k/cancel', (req, res) => { const j = jobs.get(req.params.k); if (j) { j.cancel = true; j.child?.kill(); } res.json({ ok: true }); });
+app.post('/api/jobs/:k/cancel', (req, res) => { const j = jobs.get(req.params.k); if (j) { j.cancel = true; j.abort?.abort(); PW.killTree(j.child); } res.json({ ok: true }); });
 app.get('/api/jobs/:k/events', (req, res) => {
   const job = jobs.get(req.params.k); if (!job) return res.status(404).end();
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' }); res.flushHeaders();
@@ -163,7 +176,7 @@ app.get('/api/runs', wrap(async (req, res) => {
   const out = [];
   if (fs.existsSync(OUT)) for (const h of fs.readdirSync(OUT, { withFileTypes: true })) if (h.isDirectory()) for (const d of fs.readdirSync(path.join(OUT, h.name))) {
     const f = path.join(OUT, h.name, d, 'report.json'); if (!fs.existsSync(f)) continue;
-    try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); out.push({ id: `${h.name}~${d}`, title: j.title, when: j.when, verdict: j.verdict, score: j.score ?? Math.round(((j.totals.pass + 0.5 * j.totals.warn) / Math.max(1, j.totals.pass + j.totals.warn + j.totals.fail)) * 100), totals: j.totals, kind: j.meta?.kind || d.split('-').slice(2).join('-'), t: fs.statSync(f).mtimeMs }); } catch { /* skip */ }
+    try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); out.push({ id: `${h.name}~${d}`, title: j.title, when: j.when, verdict: j.verdict, score: j.score ?? Math.round(((j.totals.pass + 0.5 * j.totals.warn) / Math.max(1, j.totals.pass + j.totals.warn + j.totals.fail)) * 100), totals: j.totals, kind: j.meta?.kind || d.split('-').slice(2).join('-'), checks: j.meta?.checks?.length ?? j.sections.reduce((n, s) => n + s.report.length, 0), pages: j.sections.length, partial: !!j.meta?.partial, t: fs.statSync(f).mtimeMs }); } catch { /* skip */ }
   }
   res.json(out.sort((a, b) => b.t - a.t).slice(0, 40));
 }));
