@@ -4,6 +4,11 @@
   "description": "MCP server + web UI that audits any website or local project: Playwright tests, SEO checklist, tech-stack analysis and security scan, with downloadable reports",
   "type": "module",
   "main": "server.js",
+  "bin": {
+    "web-qa-mcp": "server.js",
+    "web-qa-ui": "ui/server.js",
+    "web-qa-skills": "install-skills.js"
+  },
   "engines": { "node": ">=18" },
   "scripts": {
     "setup": "node setup.js",
@@ -14,6 +19,7 @@
   "keywords": ["mcp", "playwright", "seo", "qa", "testing", "claude"],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@playwright/test": "^1.63.0",
     "axe-core": "^4.14.0",
     "docx": "^9.9.0",
     "express": "^5.2.1",

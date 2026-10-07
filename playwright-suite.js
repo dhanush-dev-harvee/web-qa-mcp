@@ -5,13 +5,22 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { res, PW_SPECS } from './tests.js';
+import { createRequire } from 'node:module';
+import { res, PW_SPECS, ensureBrowser } from './tests.js';
 export { PW_SPECS };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PW_DIR = path.resolve(process.env.WEBQA_PW_DIR || path.join(HERE, 'playwright-testing'));
 export const PW_PROJECTS = ['chromium', 'firefox', 'webkit', 'mobile-chrome'];
-export const pwAvailable = () => fs.existsSync(path.join(PW_DIR, 'playwright.config.js')) && fs.existsSync(path.join(PW_DIR, 'node_modules', '@playwright', 'test', 'cli.js'));
+// The Playwright Test runner comes from this package's own dependencies (so it works when run from GitHub with no setup),
+// or from the project's own node_modules if it has one.
+const require = createRequire(import.meta.url);
+function pwCli() {
+  const own = path.join(PW_DIR, 'node_modules', '@playwright', 'test', 'cli.js');
+  if (fs.existsSync(own)) return own;
+  try { return path.join(path.dirname(require.resolve('@playwright/test/package.json')), 'cli.js'); } catch { return null; }
+}
+export const pwAvailable = () => fs.existsSync(path.join(PW_DIR, 'playwright.config.js')) && !!pwCli();
 
 // Root-relative test paths (e.g. goto('/about.html')) break when the app lives under a sub-path such as
 // http://localhost/my-app/. This tiny reverse proxy maps http://127.0.0.1:PORT/x -> <target>/x.
@@ -91,7 +100,8 @@ export async function runPlaywright(o) {
   if (o.contactPath) env.PW_CONTACT_PATH = o.contactPath;
   if (o.headed) { env.HEADED = '1'; env.SLOWMO = String(o.slowMo || 300); env.PW_WORKERS = '1'; } else if (o.workers) env.PW_WORKERS = String(o.workers);
 
-  const cli = path.join(PW_DIR, 'node_modules', '@playwright', 'test', 'cli.js');
+  for (const eng of new Set(projects.map((p) => (p === 'mobile-chrome' ? 'chromium' : p)))) await ensureBrowser(eng);   // download browsers on first use
+  const cli = pwCli();
   const args = [cli, 'test', ...specs, ...projects.flatMap((p) => ['--project', p])];
   const tail = [];
 

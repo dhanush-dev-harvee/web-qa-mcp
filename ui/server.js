@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Web QA Studio — local web UI for the web-qa engine. Binds to 127.0.0.1 only.
 import express from 'express';
 import http from 'node:http';

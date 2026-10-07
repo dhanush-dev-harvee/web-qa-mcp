@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -123,4 +124,5 @@ reg('run_playwright_suite', 'Run the Playwright Test project (spec files from pl
   } finally { proxy?.close(); }
 });
 
+T.ensureBrowser('chromium');   // first run on a new machine: start downloading the browser in the background right away
 await server.connect(new StdioServerTransport());

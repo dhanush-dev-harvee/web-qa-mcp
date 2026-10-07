@@ -4,12 +4,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-export const PROFILE_DIR = path.join(HERE, 'profiles');
-export const OUT_DIR = path.resolve(process.env.WEBQA_OUT_DIR || path.join(HERE, 'results'));
+// When run straight from GitHub (npx), the package lives in a temporary npm cache folder. Reports and saved
+// profiles must go somewhere permanent instead: ~/web-qa-results and ~/.web-qa/profiles.
+const INSTALLED = /[\\/]node_modules[\\/]|[\\/]_npx[\\/]/.test(HERE);
+const BUNDLED_PROFILES = path.join(HERE, 'profiles');
+export const PROFILE_DIR = path.resolve(process.env.WEBQA_PROFILE_DIR || (INSTALLED ? path.join(os.homedir(), '.web-qa', 'profiles') : BUNDLED_PROFILES));
+export const OUT_DIR = path.resolve(process.env.WEBQA_OUT_DIR || (INSTALLED ? path.join(os.homedir(), 'web-qa-results') : path.join(HERE, 'results')));
 fs.mkdirSync(OUT_DIR, { recursive: true });
+fs.mkdirSync(PROFILE_DIR, { recursive: true });
 
 export const VIEWPORTS = {
   mobile: { width: 375, height: 812 },
@@ -20,13 +27,16 @@ const engines = { chromium, firefox, webkit };
 export const res = (name, status, details = '', cat = '') => ({ name, status, details, cat });
 
 // ---------- profiles ----------
+const profileDirs = () => [...new Set([PROFILE_DIR, BUNDLED_PROFILES])];   // your saved profiles first, then the ones shipped with the package
 export function listProfiles() {
-  return fs.readdirSync(PROFILE_DIR).filter((f) => f.endsWith('.json') && !f.startsWith('_')).map((f) => f.slice(0, -5));
+  const names = new Set();
+  for (const d of profileDirs()) if (fs.existsSync(d)) for (const f of fs.readdirSync(d)) if (f.endsWith('.json') && !f.startsWith('_')) names.add(f.slice(0, -5));
+  return [...names].sort();
 }
 export function loadProfile(name) {
   if (!name) return {};
-  const f = path.join(PROFILE_DIR, `${name}.json`);
-  if (!fs.existsSync(f)) throw new Error(`Profile "${name}" not found. Available: ${listProfiles().join(', ') || '(none)'}`);
+  const f = profileDirs().map((d) => path.join(d, `${name}.json`)).find((p) => fs.existsSync(p));
+  if (!f) throw new Error(`Profile "${name}" not found. Available: ${listProfiles().join(', ') || '(none)'}`);
   return JSON.parse(fs.readFileSync(f, 'utf8'));
 }
 export function saveProfile(name, data) {
@@ -52,7 +62,21 @@ async function login(page, a) {
   await page.waitForLoadState('networkidle').catch(() => {});
 }
 
+// First run on a new machine: download the browser automatically (progress goes to stderr, never stdout, so MCP stays valid).
+const installing = {};
+export function ensureBrowser(name = 'chromium') {
+  try { if (fs.existsSync(engines[name].executablePath())) return Promise.resolve(); } catch { /* not installed */ }
+  installing[name] ||= new Promise((ok) => {
+    process.stderr.write(`[web-qa] installing the ${name} browser (first run only, about 1-2 minutes)...\n`);
+    const cli = path.join(path.dirname(require.resolve('playwright/package.json')), 'cli.js');
+    const p = spawn(process.execPath, [cli, 'install', name], { stdio: ['ignore', 2, 2] });
+    p.on('close', ok); p.on('error', ok);
+  });
+  return installing[name];
+}
+
 export async function withPage(cfg, fn) {
+  await ensureBrowser(cfg.browser || 'chromium');
   const b = await engines[cfg.browser || 'chromium'].launch({ headless: !cfg.headed, slowMo: cfg.headed ? 150 : 0 });
   cfg.tracker?.push(b);   // lets runSuite close this browser if the check times out or the user cancels
   const ctxOpts = { viewport: VIEWPORTS[cfg.viewport] || VIEWPORTS.desktop, ignoreHTTPSErrors: true };
