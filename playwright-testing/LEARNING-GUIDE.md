@@ -60,4 +60,4 @@ The specs read their target from environment variables; with none set nothing ch
 | `PW_RETRIES`, `PW_WORKERS`, `PW_CONTACT_PATH` | retries, parallel workers, path of the page with the contact form |
 
 PowerShell: `$env:PW_BASE_URL="https://example.com"; $env:PW_OUT_DIR="out"; npx playwright test --project=chromium`
-Or use the UI: `D:\tools\web-qa-mcp\start-ui.bat` -> tick "Playwright suite". Original copies of the changed files: `.webqa-backup/`.
+Or use the UI (`npm run ui` in the web-qa-mcp folder) and tick "Playwright suite".
