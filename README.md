@@ -32,6 +32,12 @@ claude mcp add --scope user web-qa -- cmd /c npx -y github:OWNER/web-qa-mcp
 }
 ```
 
+**No `claude` command on the computer** (you use the Claude desktop app, not the terminal tool)? Run this one command instead. It adds web-qa to Claude's config files for you, with a backup, and works on Windows, macOS and Linux:
+```bash
+npx -y --package=github:OWNER/web-qa-mcp web-qa-register
+```
+Then fully quit and reopen Claude. To undo it: `npx -y --package=github:OWNER/web-qa-mcp web-qa-register --remove`.
+
 The first start downloads the code and the Chromium browser (about 1-2 minutes); after that it starts in seconds. Nothing is cloned into your projects.
 To get a newer version later, delete the `_npx` folder inside the folder printed by `npm config get cache`, then restart Claude. You can also pin a version with a Git tag, e.g. `github:OWNER/web-qa-mcp#v2.0.0`.
 

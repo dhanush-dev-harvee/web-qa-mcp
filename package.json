@@ -7,7 +7,8 @@
   "bin": {
     "web-qa-mcp": "server.js",
     "web-qa-ui": "ui/server.js",
-    "web-qa-skills": "install-skills.js"
+    "web-qa-skills": "install-skills.js",
+    "web-qa-register": "register.js"
   },
   "engines": { "node": ">=18" },
   "scripts": {
