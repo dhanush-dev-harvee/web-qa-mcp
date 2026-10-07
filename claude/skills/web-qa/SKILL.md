@@ -9,7 +9,7 @@ Entry point for all website testing. Pick the right sub-skill, run the checks th
 
 ## 1. Establish the target (ask only if missing)
 - **Live site**: a full URL. Confirm the user owns it or has permission (security checks probe common sensitive paths).
-- **Local project**: a folder under `your local web root (e.g. xampp htdocs)` or any path. It needs a URL to test:
+- **Local project**: a folder under your local web root (for example xampp htdocs) or any path. It needs a URL to test:
   - Apache running -> `http://localhost/<folder>/`.
   - Plain HTML folder -> Web QA Studio serves it statically.
   - PHP project with Apache stopped -> tell the user to start XAMPP Apache. Do NOT test the static copy: PHP in `.html` files will not run and results will be wrong.
@@ -32,7 +32,7 @@ Whole site: use `run_site_audit` (pages from profile, sitemap, or crawl; default
 1. For a site the user will test repeatedly, `save_profile` (baseUrl, pages, ignoreConsole regexes for third-party noise, loadBudgetMs).
 2. Run the tools. Use `headed: true` if the user wants to watch.
 3. Every run writes `results/<host>/<timestamp>-<kind>/report.html|md|json` + screenshots. Always give the user the report path.
-4. Alternative with a UI: ``npm run ui` (in the web-qa-mcp folder)` -> http://localhost:4010 (downloads Word/HTML/MD/JSON).
+4. Alternative with a UI: run `npm run ui` in the web-qa-mcp folder (or `npx -y --package=github:<owner>/web-qa-mcp web-qa-ui`), then open http://localhost:4010 (downloads Word/HTML/MD/JSON).
 
 ## 4. Safety rules
 - `test_form` never submits unless `submit: true`. Only submit on a staging/test environment or when the user explicitly confirms; a submit sends a real enquiry/email.

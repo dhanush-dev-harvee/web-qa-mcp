@@ -18,7 +18,7 @@ Run `run_full_suite` with `only: ["pageLoad","consoleErrors","navigation","forms
 | accessibility | no serious/critical axe-core violations (contrast, button/label names, list structure) |
 
 ## The Playwright Test project (spec files)
-For the full 5-spec suite (smoke, SEO, links/crawl, performance + a11y, mouse/keyboard journeys + responsive) use `run_playwright_suite`, or tick "Playwright suite" in the UI. It runs the real `@playwright/test` project at `the bundled `playwright-testing` folder` against any URL or profile, in chromium by default. Add `projects: ["firefox","webkit","mobile-chrome"]` for cross-browser (those only run specs 01 and 05). `headed: true` plus `slowMo` lets the user watch the mouse move.
+For the full 5-spec suite (smoke, SEO, links/crawl, performance + a11y, mouse/keyboard journeys + responsive) use `run_playwright_suite`, or tick "Playwright suite" in the UI. It runs the real `@playwright/test` project in the bundled `playwright-testing` folder against any URL or profile, in chromium by default. Add `projects: ["firefox","webkit","mobile-chrome"]` for cross-browser (those only run specs 01 and 05). `headed: true` plus `slowMo` lets the user watch the mouse move.
 
 Results come back as PASS/FAIL rows plus the project's own findings: severity high = FAIL, medium and low = WARN, info = INFO. Open `pw/playwright-report/index.html` in the run folder for traces and videos of failures. `list_playwright_specs` shows what exists. Do not edit the spec files to suit one site; site-specific settings belong in the `PW_*` environment variables or a new spec.
 
