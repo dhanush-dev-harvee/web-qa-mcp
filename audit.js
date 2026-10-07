@@ -350,7 +350,23 @@ export async function security(cfg) {
   out.push(res(`Sensitive-path probe (${PROBES.length} paths)`, found.length ? (found.some((f) => f[0] === 'fail') ? 'fail' : 'warn') : 'pass', found.length ? `${found.length} exposed` : 'nothing exposed', 'Exposed files'));
   const sx = await get(o + '/.well-known/security.txt', { method: 'HEAD' });
   out.push(res('security.txt', sx?.status === 200 ? 'pass' : 'info', sx?.status === 200 ? 'present' : 'optional: lets researchers report issues', C));
-  if (cfg.folder && fs.existsSync(cfg.folder)) out.push(...sourceSecurity(cfg.folder));
+  if (cfg.folder && fs.existsSync(cfg.folder)) {
+    const src = sourceSecurity(cfg.folder);
+    out.push(...src);
+    // Cross-check: are the risky local files actually downloadable on the live site? (HEAD requests only; nothing is read.)
+    // Assumes the local folder is the site's web root. Only non-HTML 200 responses count (a 200 HTML page is a normal error/home page).
+    if (!isLocal(cfg.url) && src.paths) {
+      const cand = [...new Set([...src.paths.cred, ...src.paths.risky])].filter((p) => !/node_modules|\/(vendor|\.git)\//.test(p)).slice(0, 60);
+      const live = [];
+      await Promise.all(cand.map(async (p) => {
+        const r = await get(o + '/' + p.split('/').map(encodeURIComponent).join('/'), { method: 'HEAD', redirect: 'manual', timeout: 10000 });
+        const ct = r?.headers.get('content-type') || '';
+        if (r && r.status === 200 && !/text\/html/i.test(ct)) live.push(`${p} (${ct.split(';')[0] || 'unknown type'}, ${r.headers.get('content-length') || '?'} bytes)`);
+      }));
+      out.push(res('Local sensitive files downloadable on the live site', live.length ? 'fail' : 'pass',
+        live.length ? `${live.join('; ')} - anyone can download these. Remove or block them, and replace any credential they contain.` : `${cand.length} local file(s) checked with header-only requests; none returned a downloadable file`, 'Exposed files'));
+    }
+  }
   return out;
 }
 
@@ -362,13 +378,14 @@ function sourceSecurity(folder) {
   out.push(res('Large log files in web root', big.length ? 'fail' : 'pass', big.length ? big.slice(0, 4).map((l) => `${rel(l.f)} (${(l.s / 1e6).toFixed(0)} MB)`).join('; ') : 'none over 5 MB', C));
   const risky = files.filter((f) => /(^|[\\/])(\.env|phpinfo\.php|info\.php|test\.php|adminer\.php|\.htpasswd)$|\.(sql|bak|old|orig|swp|zip|tar|gz)$/i.test(f) && !/[\\/](uploads|images|fonts)[\\/]/i.test(f));
   out.push(res('Stale / sensitive files in web root', risky.length ? 'warn' : 'pass', risky.slice(0, 12).map(rel).join('; ') + (risky.length > 12 ? ` … +${risky.length - 12}` : ''), C));
-  const hits = [];
+  const hits = [], credPaths = [];
   for (const f of files) {
     if (!/\.(php|js|html?|json|ya?ml|ini|config|txt)$/i.test(f) || /[\\/](uploads|images|fonts|wp-content[\\/]plugins|js[\\/].*\.min\.js)/i.test(f) || /\.min\./i.test(f)) continue;
     let st; try { st = fs.statSync(f); } catch { continue; } if (st.size > 400000) continue;
-    const m = fs.readFileSync(f, 'utf8').match(SECRET_RE); if (m) hits.push(`${rel(f)} (${m[0].slice(0, 14).replace(/['"]/g, '')}… masked)`);
+    const m = fs.readFileSync(f, 'utf8').match(SECRET_RE); if (m) { hits.push(`${rel(f)} (${m[0].slice(0, 14).replace(/['"]/g, '')}… masked)`); credPaths.push(rel(f)); }
     if (hits.length >= 15) break;
   }
+  out.paths = { risky: risky.map(rel), cred: credPaths };   // used by security() to test whether these are downloadable on the live site
   out.push(res('Credentials / keys in source files', hits.length ? 'fail' : 'pass', hits.length ? hits.join('; ') + ' — move to environment variables outside the web root' : 'none found in scanned files', C));
   out.push(res('Files scanned', 'info', `${files.length} files (node_modules, vendor, .git skipped)`, C));
   return out;
