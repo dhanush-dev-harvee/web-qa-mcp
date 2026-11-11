@@ -23,7 +23,7 @@ export async function buildDocx(j) {
   kids.push(P(`Generated: ${j.when}   |   Tool: Web QA Studio (Playwright)`, { color: '6B7280', size: 18 }));
   kids.push(H('1. Summary'));
   kids.push(table(['Item', 'Result'], [
-    ['Overall verdict', j.verdict], ['Quality score', `${j.score} / 100`],
+    ['Overall verdict', j.verdict], ['Quality score', j.score == null ? 'not scored (nothing could be tested)' : `${j.score} / 100`],
     ['Checks passed', j.totals.pass], ['Failures (fix first)', j.totals.fail], ['Warnings', j.totals.warn], ['Pages tested', j.sections.length],
     ['Checks run', (j.meta?.checks || []).join(', ')],
   ], [30, 70]));

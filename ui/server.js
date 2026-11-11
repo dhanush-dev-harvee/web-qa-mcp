@@ -177,7 +177,7 @@ app.get('/api/runs', wrap(async (req, res) => {
   const out = [];
   if (fs.existsSync(OUT)) for (const h of fs.readdirSync(OUT, { withFileTypes: true })) if (h.isDirectory()) for (const d of fs.readdirSync(path.join(OUT, h.name))) {
     const f = path.join(OUT, h.name, d, 'report.json'); if (!fs.existsSync(f)) continue;
-    try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); out.push({ id: `${h.name}~${d}`, title: j.title, when: j.when, verdict: j.verdict, score: j.score ?? Math.round(((j.totals.pass + 0.5 * j.totals.warn) / Math.max(1, j.totals.pass + j.totals.warn + j.totals.fail)) * 100), totals: j.totals, kind: j.meta?.kind || d.split('-').slice(2).join('-'), checks: j.meta?.checks?.length ?? j.sections.reduce((n, s) => n + s.report.length, 0), pages: j.sections.length, partial: !!j.meta?.partial, t: fs.statSync(f).mtimeMs }); } catch { /* skip */ }
+    try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); out.push({ id: `${h.name}~${d}`, title: j.title, when: j.when, verdict: j.verdict, score: j.verdict?.startsWith('NOT TESTED') ? null : j.score ?? Math.round(((j.totals.pass + 0.5 * j.totals.warn) / Math.max(1, j.totals.pass + j.totals.warn + j.totals.fail)) * 100), totals: j.totals, kind: j.meta?.kind || d.split('-').slice(2).join('-'), checks: j.meta?.checks?.length ?? j.sections.reduce((n, s) => n + s.report.length, 0), pages: j.sections.length, partial: !!j.meta?.partial, t: fs.statSync(f).mtimeMs }); } catch { /* skip */ }
   }
   res.json(out.sort((a, b) => b.t - a.t).slice(0, 40));
 }));

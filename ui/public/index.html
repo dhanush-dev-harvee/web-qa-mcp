@@ -182,7 +182,7 @@ $('#cancel').onclick = () => fetch(`/api/jobs/${JOB}/cancel`, { method: 'POST' }
 // ---- history
 async function loadHistory() {
   const l = await (await fetch('/api/runs')).json();
-  $('#hist').innerHTML = l.length ? l.map((r) => `<div class="h" data-id="${esc(r.id)}"><div>${esc(r.title.replace(/^https?:\/\//, ''))}<small>${esc(r.when)} · ${esc(r.kind)} · ${r.checks} checks · ${r.pages} page(s)${r.partial ? ' · <b class="bad">partial</b>' : ''}</small></div><span class="badge ${r.totals.fail ? 'b-fail' : r.totals.warn ? 'b-warn' : 'b-pass'}">${r.score}</span></div>`).join('') : '<div class="note">No reports yet.</div>';
+  $('#hist').innerHTML = l.length ? l.map((r) => `<div class="h" data-id="${esc(r.id)}"><div>${esc(r.title.replace(/^https?:\/\//, ''))}<small>${esc(r.when)} · ${esc(r.kind)} · ${r.checks} checks · ${r.pages} page(s)${r.partial ? ' · <b class="bad">partial</b>' : ''}</small></div><span class="badge ${r.totals.fail ? 'b-fail' : r.totals.warn ? 'b-warn' : 'b-pass'}">${r.score ?? '–'}</span></div>`).join('') : '<div class="note">No reports yet.</div>';
   $('#hist').onclick = (e) => { const h = e.target.closest('.h'); if (h) loadReport(h.dataset.id); };
 }
 
@@ -191,7 +191,7 @@ async function loadReport(id) { RID = id; DATA = await (await fetch('/api/runs/'
 const rows = (g) => { const o = []; for (const s of DATA.sections) for (const r of s.report) if (!g || GROUP[r.suite] === g) for (const x of r.results) o.push({ ...x, page: s.title, suite: r.suite }); return o; };
 const cnt = (a) => ({ pass: a.filter((x) => x.status === 'pass').length, warn: a.filter((x) => x.status === 'warn').length, fail: a.filter((x) => x.status === 'fail').length });
 const sc = (c) => (c.pass + c.warn + c.fail ? Math.round(((c.pass + 0.5 * c.warn) / (c.pass + c.warn + c.fail)) * 100) : 100);
-const col = (n) => (n >= 85 ? 'var(--pass)' : n >= 60 ? 'var(--warn)' : 'var(--fail)');
+const col = (n) => (n == null ? '#6b7280' : n >= 85 ? 'var(--pass)' : n >= 60 ? 'var(--warn)' : 'var(--fail)');
 const badge = (s) => `<span class="badge b-${s}">${s.toUpperCase()}</span>`;
 const table = (a, page) => `<table><tr><th style="width:70px">Status</th>${page ? '<th>Page</th>' : ''}<th>Check</th><th>Details</th></tr>${a.map((x) => `<tr><td>${badge(x.status)}</td>${page ? `<td>${esc(x.page)}</td>` : ''}<td>${x.cat ? `<span class="cat">${esc(x.cat)}</span>` : ''}${esc(x.name)}</td><td class="d">${esc(x.details).replace(/\n/g, '<br>')}</td></tr>`).join('')}</table>`;
 
@@ -199,7 +199,7 @@ function renderReport(tab) {
   const d = DATA, dir = '/results/' + RID.replace('~', '/');
   const tabs = [['summary', 'Summary'], ['fix', 'To fix'], ['stack', 'Tech stack'], ['SEO', 'SEO'], ['Security', 'Security'], ['Functional QA', 'Functional QA'], ...(d.meta?.playwright ? [['Playwright suite', 'Playwright suite']] : []), ['shots', 'Screenshots']];
   const dl = (f, l) => `<a class="btn ghost" href="/api/runs/${encodeURIComponent(RID)}/download/${f}">${l}</a>`;
-  let h = `<div class="top"><div class="ring" style="background:conic-gradient(${col(d.score)} ${d.score * 3.6}deg,var(--line) 0)"><div><span><b>${d.score}</b><small>/ 100</small></span></div></div>
+  let h = `<div class="top"><div class="ring" style="background:conic-gradient(${col(d.score)} ${(d.score ?? 0) * 3.6}deg,var(--line) 0)"><div><span><b>${d.score ?? '–'}</b><small>${d.score == null ? 'not scored' : '/ 100'}</small></span></div></div>
     <div><div style="font-size:18px;font-weight:700">${esc(d.title)}</div><div class="note">${esc(d.when)} · ${esc(d.meta?.kind || '')} · ${d.sections.length} page(s) · ${d.meta?.seconds ?? '?'}s${d.meta?.folder ? ' · local: ' + esc(d.meta.folder) : ''}</div>
     <div style="margin-top:6px"><span class="badge ${d.totals.fail ? 'b-fail' : d.totals.warn ? 'b-warn' : 'b-pass'}" style="font-size:13px;padding:3px 10px">${d.verdict}</span></div>
     <div class="note" style="margin-top:6px">Score covers only the ${d.meta?.checks?.length ?? '?'} check(s) in this run, so runs with different checks are not directly comparable.</div>

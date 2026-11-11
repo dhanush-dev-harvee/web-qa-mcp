@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import net from 'node:net';
+import dns from 'node:dns/promises';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -25,6 +27,44 @@ export const VIEWPORTS = {
 };
 const engines = { chromium, firefox, webkit };
 export const res = (name, status, details = '', cat = '') => ({ name, status, details, cat });
+
+// ---------- honest results: a site we could not open is NOT TESTED, never a failed check ----------
+// A page that never loads (timeout, blocked, offline) says nothing about the website's content. Those failures are turned into a
+// "Not tested" note, two in a row stop the run for that site, and the report gives no score when nothing could be tested.
+export const NET_FAIL = /Timeout \d+ms exceeded|net::ERR_|no response|no result after|Unable to retrieve content because the page is navigating|timed out|did not load/i;
+const SOCIAL_HOST = /(^|\.)(facebook|instagram|youtube|youtu|linkedin|twitter|x|wa|whatsapp|t|pinterest|tiktok)\.(com|be|me)$/i;
+export const isSocial = (u) => { try { return SOCIAL_HOST.test(new URL(u).hostname); } catch { return false; } };   // social sites refuse automated link checks
+const info = (details) => ({ name: 'Not tested', status: 'info', details, cat: '' });
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+// Can this computer open the site at all? DNS, the port, then one normal page request (twice).
+export async function reach(url) {
+  const u = new URL(url), port = u.protocol === 'http:' ? 80 : 443, out = { host: u.hostname, port };
+  try { out.ip = (await dns.lookup(u.hostname)).address; }
+  catch (e) { return { ...out, ok: false, dns: e.code || e.message, reason: `the name ${u.hostname} did not resolve (${e.code || e.message})` }; }
+  out.tcp = await new Promise((resolve) => {
+    const s = net.connect({ host: u.hostname, port, timeout: 8000 });
+    s.on('connect', () => { s.destroy(); resolve('open'); });
+    s.on('timeout', () => { s.destroy(); resolve('timed out'); });
+    s.on('error', (e) => resolve(e.code || 'error'));
+  });
+  if (out.tcp !== 'open') return { ...out, ok: false, reason: `port ${port} on ${out.ip} ${out.tcp}` };
+  for (let i = 0; i < 2; i++) {
+    try {
+      const t0 = Date.now();
+      const r = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: { 'user-agent': BROWSER_UA, accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8', 'accept-language': 'en-US,en;q=0.9' } });
+      await r.arrayBuffer().catch(() => {});
+      out.status = r.status; out.ms = Date.now() - t0; delete out.err;
+      if (r.status < 400) return { ...out, ok: true };
+    } catch (e) { out.err = e.name === 'TimeoutError' ? 'no answer within 20 s' : e.message.split('\n')[0]; }
+  }
+  return { ...out, ok: false, reason: out.status ? `the server answered HTTP ${out.status}` : `the server did not answer the page request (${out.err})` };
+}
+export const reachLines = (p) => [
+  ['Website name resolves (DNS)', p.ip ? `yes, ${p.ip}` : `no (${p.dns})`],
+  [`Port ${p.port} (secure web)`, p.tcp || 'not tried'],
+  ['Page request', p.status ? `HTTP ${p.status} in ${p.ms} ms` : (p.err || 'not tried')],
+];
 
 // ---------- profiles ----------
 const profileDirs = () => [...new Set([PROFILE_DIR, BUNDLED_PROFILES])];   // your saved profiles first, then the ones shipped with the package
@@ -242,8 +282,9 @@ export async function brokenLinks(cfg) {
     await go(page, cfg.url);
     const links = await page.evaluate(() => [...new Set([...document.querySelectorAll('a[href]')].map((a) => a.href).filter((h) => /^https?:/.test(h)))]);
     const todo = links.filter((l) => !matches(l, cfg.skipLinks)).slice(0, cfg.maxLinks || 60);
-    const bad = [], cache = cfg.linkCache || new Map();   // cache: header/footer links repeat on every page, check each URL once per run
+    const bad = [], social = [], cache = cfg.linkCache || new Map();   // cache: header/footer links repeat on every page, check each URL once per run
     const check = async (l) => {
+      if (isSocial(l)) { social.push(l); return; }   // Facebook, YouTube... refuse automated checks: not a broken link
       if (!cache.has(l)) cache.set(l, (async () => {
         try {
           let r = await ctx.request.head(l, { timeout: 8000, failOnStatusCode: false });
@@ -255,7 +296,8 @@ export async function brokenLinks(cfg) {
     };
     const queue = [...todo];                                // 8 requests in parallel instead of one at a time
     await Promise.all(Array.from({ length: 8 }, async () => { while (queue.length) await check(queue.shift()); }));
-    return [res(`Links OK (${todo.length}/${links.length} checked)`, bad.length ? 'fail' : 'pass', bad.join('\n'))];
+    const note = social.length ? `${social.length} social media link(s) not checked: those sites refuse automated checks` : '';
+    return [res(`Links OK (${todo.length - social.length}/${links.length} checked)`, bad.length ? 'fail' : 'pass', bad.length ? bad.join('\n') + (note ? '\n' + note : '') : note)];
   });
 }
 
@@ -418,8 +460,19 @@ export async function runSuite(cfg, only) {
   const names = only?.length ? only : cfg.suites || Object.keys(SUITES);
   const report = [];
   const limit = cfg.suiteTimeoutMs || 150000;   // no single check may run longer than this (default 2.5 min)
+  const netState = (cfg.net ||= { fails: 0, blocked: false, reason: '' });   // pass the same object for every page of a site to share it
+  // network failures are not findings about the website: drop them, say so, and stop after two in a row
+  const classify = (results) => {
+    const bad = results.filter((x) => x.status === 'fail' && NET_FAIL.test(`${x.name} ${x.details || ''}`));
+    if (!bad.length) { netState.fails = 0; return { results, clean: true }; }
+    netState.fails++;
+    const why = (bad[0].details || bad[0].name).split('\n')[0].slice(0, 120);
+    if (netState.fails >= 2) { netState.blocked = true; netState.reason = `the site stopped answering (${why})`; }
+    return { results: [...results.filter((x) => !bad.includes(x)), info(`The page did not load (${why}). Not a finding about the website.`)], clean: false };
+  };
   for (const n of names) {
     if (cfg.signal?.aborted) break;
+    if (netState.blocked) { report.push({ suite: n, results: [info(`Skipped: ${netState.reason}`)], shots: [] }); continue; }
     const evidence = [], tracker = [];
     const c = { ...cfg, suiteName: n, evidence, tracker };
     let timer, onAbort;
@@ -434,9 +487,10 @@ export async function runSuite(cfg, only) {
       if (out === 'timeout' || out === 'cancel') {
         await Promise.all(tracker.map((b) => b.close().catch(() => {})));   // kill the stuck browser(s)
         if (out === 'cancel') break;
-        report.push({ suite: n, results: [res(`${n} timed out`, 'fail', `no result after ${Math.round(limit / 1000)}s - the page or network is too slow, or the page blocks automation. Re-run this check on its own or test fewer pages.`, 'Run')], shots: evidence });
-      } else report.push({ suite: n, results: out.results, shots: evidence });
-    } catch (e) { report.push({ suite: n, results: [res(n, 'fail', 'suite crashed: ' + e.message.split('\n')[0])], shots: evidence }); }
+        const c2 = classify([res(`${n} timed out`, 'fail', `no result after ${Math.round(limit / 1000)}s - the page or network is too slow, or the page blocks automation. Re-run this check on its own or test fewer pages.`, 'Run')]);
+        report.push({ suite: n, results: c2.results, shots: [] });
+      } else { const c2 = classify(out.results); report.push({ suite: n, results: c2.results, shots: c2.clean ? evidence : [] }); }
+    } catch (e) { const c2 = classify([res(n, 'fail', 'suite crashed: ' + e.message.split('\n')[0])]); report.push({ suite: n, results: c2.results, shots: c2.clean ? evidence : [] }); }
     finally { clearTimeout(timer); cfg.signal?.removeEventListener('abort', onAbort); }
   }
   return report;
